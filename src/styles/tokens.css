@@ -1,0 +1,11 @@
+:root {
+  --brand-lime:#C1FF05;--brand-purple:#9E6FC3;--brand-orange:#FF7D32;--brand-blue:#C8E1FC;--brand-metal:#BAB8BA;--brand-white:#FFFFFF;
+  --text:#222222;--text-secondary:#717171;--border:#DEDFE1;--background:#F3F4F6;
+  --surface:var(--brand-white);--action:var(--brand-lime);--action-hover:color-mix(in srgb,var(--brand-lime) 86%,var(--text));--action-pressed:color-mix(in srgb,var(--brand-lime) 75%,var(--text));
+  --purple-soft:color-mix(in srgb,var(--brand-purple) 13%,var(--surface));--blue-soft:color-mix(in srgb,var(--brand-blue) 42%,var(--surface));--lime-soft:color-mix(in srgb,var(--brand-lime) 18%,var(--surface));--orange-soft:color-mix(in srgb,var(--brand-orange) 16%,var(--surface));
+  --purple-ink:color-mix(in srgb,var(--brand-purple) 50%,var(--text));--error:color-mix(in srgb,var(--brand-orange) 40%,var(--text));--focus:var(--purple-ink);--overlay:color-mix(in srgb,var(--text) 38%,transparent);--shadow:color-mix(in srgb,var(--text) 7%,transparent);
+  --font-ui:'Onest',Arial,sans-serif;--font-promo:'Montserrat',Arial,sans-serif;
+  --text-xs:12px;--text-sm:14px;--text-base:16px;--text-lg:20px;--text-xl:24px;--text-2xl:32px;--text-3xl:40px;
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--space-10:40px;--space-12:48px;--space-16:64px;
+  --radius-control:12px;--radius-card:24px;--radius-pill:999px;--control-height:48px;--content-width:1200px;
+}
