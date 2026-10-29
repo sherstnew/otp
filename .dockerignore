@@ -1,0 +1,12 @@
+.git
+node_modules
+dist
+.npm-cache
+.vite
+artifacts
+docs
+tests
+*.tsbuildinfo
+*.log
+.env
+.env.*
