@@ -9,7 +9,9 @@ export type AchievementRequest = {
   source: string; resultDate: string; contributionId: string; publicConsent: boolean;
   status: RequestStatus; audit: Audit[]; entryId?: string; appeal?: string; appealResolution?: string;
 };
-export type Thanks = { id: string; fromId: string; toId: string; message: string; date: string };
+export type ThanksValue = 'result'|'learning'|'enjoyment';
+export type Thanks = { id: string; fromId: string; toId: string; message: string; date: string; kind?:'simple'|'weighted'; value?:ThanksValue; points?:number; entryId?:string; ratingNote?:string };
+export const thanksValues:Record<ThanksValue,string>={result:'Result — полезный результат',learning:'Learning — новые знания',enjoyment:'Enjoyment — поддержка и удовольствие от работы'};
 export type OpportunityApplication = { id: string; employeeId: string; programId: string; path: 'delta' | 'achievement'; achievementId?: string; motivation: string; status: 'pending' | 'accepted' | 'rejected'; audit: Audit[] };
 export type RecognitionState = { requests: AchievementRequest[]; thanks: Thanks[]; applications: OpportunityApplication[] };
 export const emptyRecognition = (): RecognitionState => ({ requests: [], thanks: [], applications: [] });
@@ -20,12 +22,19 @@ export function validRecognition(value: unknown): value is RecognitionState {
   const audit=(v:unknown)=>Array.isArray(v)&&v.every(a=>a&&str(a.actorId)&&str(a.action)&&str(a.reason)&&str(a.date)&&Number.isFinite(Date.parse(a.date)));
   return Array.isArray(s.requests)&&Array.isArray(s.thanks)&&Array.isArray(s.applications)
     &&s.requests.every(r=>r&&[r.id,r.employeeId,r.authorId,r.reviewerId,r.title,r.action,r.benefit,r.personalRole,r.participants,r.source,r.resultDate,r.contributionId].every(str)&&['professional','social','management'].includes(r.kind)&&['draft','pending','clarification','approved','rejected','corrected'].includes(r.status)&&typeof r.publicConsent==='boolean'&&audit(r.audit))
-    &&s.thanks.every(t=>t&&[t.id,t.fromId,t.toId,t.message,t.date].every(str)&&Number.isFinite(Date.parse(t.date)))
+    &&s.thanks.every(t=>t&&[t.id,t.fromId,t.toId,t.message,t.date].every(str)&&Number.isFinite(Date.parse(t.date))&&(t.kind===undefined||t.kind==='simple'||t.kind==='weighted')&&(t.points===undefined||[0,1,2].includes(t.points))&&(t.kind!=='weighted'||!!t.message.trim()&&!!t.value&&Object.hasOwn(thanksValues,t.value))&&(t.entryId===undefined||str(t.entryId)))
     &&s.applications.every(a=>a&&[a.id,a.employeeId,a.programId,a.motivation].every(str)&&['delta','achievement'].includes(a.path)&&['pending','accepted','rejected'].includes(a.status)&&PROGRAMS.some(p=>p.id===a.programId)&&audit(a.audit));
 }
 const managers: Record<string, string> = { e1:'e2', e4:'e2', e5:'e2', e6:'e2', e2:'e9', e3:'e9', e7:'e9', e8:'e9', e10:'e12', e11:'e12', e12:'e9' };
 export function ratingProfile(employee: Employee) {
   return { managerId: managers[employee.id], group: `${employee.department} · ${employee.role === 'lead' ? 'руководители' : 'специалисты'}`, newcomer: employee.id === 'e6' || employee.id === 'e8' };
+}
+export function leaderboardGroup(employee:Employee) {
+  return `${employee.department} · ${employee.role==='lead'?'руководители':employee.role==='hr'?'HR':'специалисты'}`;
+}
+export function ratingLeaderboard(state:State,group:string,period:'all'|'recent'='all',today=moscowDay()) {
+  const scored=state.employees.filter(e=>leaderboardGroup(e)===group).map(employee=>({employee,score:period==='all'?employee.rating:recentRating(state,employee.id,today)})).sort((a,b)=>b.score-a.score||a.employee.name.localeCompare(b.employee.name,'ru'));
+  return scored.map(row=>({...row,place:1+scored.filter(other=>other.score>row.score).length}));
 }
 export const kindLabel: Record<ContributionKind,string> = { professional:'Профессиональный вклад', social:'Социальный вклад', management:'Управленческий вклад' };
 export const statusLabel: Record<RequestStatus,string> = { draft:'Черновик', pending:'На проверке', clarification:'Нужно уточнение', approved:'Подтверждено', rejected:'Отклонено', corrected:'Начисление отменено' };
@@ -38,6 +47,11 @@ export function expiryDay(date: string): string {
 export function ratingEntries(state: State, employeeId: string) {
   const reversed = new Set(state.entries.filter(e => e.reversalOf).map(e => e.reversalOf));
   return state.entries.filter(e => e.employeeId === employeeId && e.kind === 'rating' && e.amount > 0 && !reversed.has(e.id));
+}
+export function confirmedAchievements(state:State, employeeId:string) {
+  const requests=state.recognition.requests.filter(r=>r.employeeId===employeeId&&r.status==='approved');
+  const linked=new Set(requests.map(r=>r.entryId));
+  return [...requests.map(r=>({id:r.id,title:r.title})),...ratingEntries(state,employeeId).filter(e=>e.category!=='thanks'&&!linked.has(e.id)&&!state.recognition.requests.some(r=>r.entryId===e.id)).map(e=>({id:e.id,title:e.title||e.reason}))];
 }
 export function recentRating(state: State, employeeId: string, today = moscowDay()) {
   return ratingEntries(state,employeeId).filter(e => {const d = e.effectiveDate || moscowDay(new Date(e.date));return d <= today && today < expiryDay(d);}).reduce((n,e)=>n+e.amount,0);
@@ -69,7 +83,7 @@ export function saveAchievement(state: State, input: RequestInput): State {
   if (input.requestId && !old) throw new Error('Заявка не найдена.');
   if (old && (old.authorId!==actor.id || old.employeeId!==employee.id || !['draft','clarification'].includes(old.status))) throw new Error('Эту заявку нельзя редактировать.');
   const reviewerId = reviewerFor(state,employee.id,input.kind);
-  if (actor.id!==employee.id && actor.id!==reviewerId) throw new Error('Можно предложить свой вклад или вклад непосредственного сотрудника в своём потоке.');
+  if (actor.id!==employee.id && actor.id!==reviewerId && actor.role!=='hr') throw new Error('Можно предложить свой вклад или вклад непосредственного сотрудника в своём потоке.');
   if (!input.title.trim()) throw new Error('Добавьте название достижения.');
   if (input.submit) {
     if ([input.action,input.benefit,input.personalRole,input.source,input.contributionId].some(x=>!x.trim())) throw new Error('Опишите действие, пользу, личную роль, источник и ID вклада.');
@@ -92,7 +106,7 @@ export function decideAchievement(state:State,input:{id:string;actorId:string;re
   let next=state;
   if(input.decision==='approved') {
     const amount=input.amount??0, employee=person(state,r.employeeId);
-    if(!Number.isSafeInteger(amount)||amount<=0||!Number.isSafeInteger(employee.rating+amount)) throw new Error('Укажите положительное целое число баллов. Общая шкала ещё калибруется.');
+    if(!Number.isSafeInteger(amount)||amount<=0||!Number.isSafeInteger(employee.rating+amount)) throw new Error('Укажите положительное целое число баллов.');
     if(ratingEntries(state,r.employeeId).some(e=>e.contributionId===r.contributionId)) throw new Error('Этот личный вклад уже признан.');
     const date=new Date().toISOString();
     const entry:Entry={id:input.id,employeeId:r.employeeId,authorId:input.actorId,kind:'rating',amount,reason:input.reason.trim(),date,effectiveDate:moscowDay(),resultDate:r.resultDate,title:r.title,contributionId:r.contributionId,category:r.kind,groupAtAward:ratingProfile(employee).group,roleAtAward:employee.role};
@@ -118,11 +132,40 @@ export function revokeAchievement(state:State,input:{id:string;actorId:string;re
   const next={...state,employees:state.employees.map(e=>e.id===r.employeeId?{...e,rating:e.rating-entry.amount}:e),entries:[{...entry,id:input.id,authorId:actor.id,amount:-entry.amount,reason:input.reason.trim(),date:new Date().toISOString(),reversalOf:entry.id},...state.entries]};
   return commit(next,input.id,{...state.recognition,requests:state.recognition.requests.map(x=>x.id===r.id?{...x,status:'corrected',audit:[...x.audit,note(actor.id,'Начисление отменено',input.reason.trim())]}:x)});
 }
-export function sendThanks(state:State,input:{id:string;actorId:string;employeeId:string;message:string}):State {
+// Team membership follows the direct manager; a lead belongs to the team they lead.
+function thanksTeam(e:Employee){return e.role==='lead'?e.id:ratingProfile(e).managerId||e.id;}
+export function thanksPreview(state:State,actorId:string,employeeId:string,now=new Date()) {
+  const actor=person(state,actorId),recipient=person(state,employeeId),day=moscowDay(now),month=day.slice(0,7);
+  const weighted=state.recognition.thanks.filter(t=>t.kind==='weighted');
+  const current=weighted.filter(t=>moscowDay(new Date(t.date)).slice(0,7)===month);
+  const remaining=Math.max(0,4-current.filter(t=>t.fromId===actorId).length);
+  const weight=thanksTeam(actor)===thanksTeam(recipient)?1:2;
+  const received=current.filter(t=>t.toId===employeeId).reduce((sum,t)=>sum+(t.points||0),0);
+  const start=Math.floor((Number(day.slice(5,7))-1)/3)*3+1;
+  const months=Array.from({length:3},(_,i)=>`${day.slice(0,4)}-${String(start+i).padStart(2,'0')}`);
+  const pair=[...weighted,{fromId:actorId,toId:employeeId,date:now.toISOString()}];
+  const mutual=months.every(m=>pair.some(t=>t.fromId===actorId&&t.toId===employeeId&&moscowDay(new Date(t.date)).startsWith(m))&&pair.some(t=>t.fromId===employeeId&&t.toId===actorId&&moscowDay(new Date(t.date)).startsWith(m)));
+  const note=actorId===employeeId?'Нельзя отправить благодарность себе.':!remaining?'В этом месяце использованы все 4 весомых «Спасибо». Можно отправить простое.':mutual?'Регулярные взаимные благодарности: до конца квартала баллы внутри этой пары не начисляются.':current.some(t=>t.fromId===actorId&&t.toId===employeeId)?'В этом месяце вы уже отправляли весомое «Спасибо» этому коллеге. Благодарность придёт без новых баллов.':received>=10?'Коллега уже получил 10 баллов от благодарностей за месяц. Благодарность придёт без новых баллов.':'';
+  return {weight,remaining,points:note?0:Math.min(weight,10-received),note};
+}
+export function sendThanks(state:State,input:{id:string;actorId:string;employeeId:string;message:string;kind?:'simple'|'weighted';value?:ThanksValue},now=new Date()):State {
   if(operation(state,input.id)) return state;
-  person(state,input.actorId); person(state,input.employeeId);
-  if(input.actorId===input.employeeId || !input.message.trim()) throw new Error('Выберите коллегу и напишите благодарность.');
-  return commit(state,input.id,{...state.recognition,thanks:[{id:input.id,fromId:input.actorId,toId:input.employeeId,message:input.message.trim(),date:new Date().toISOString()},...state.recognition.thanks]});
+  const actor=person(state,input.actorId),recipient=person(state,input.employeeId),kind=input.kind||'simple';
+  if(actor.id===recipient.id) throw new Error('Нельзя отправить благодарность себе.');
+  if(kind!=='simple'&&kind!=='weighted')throw new Error('Выберите вид благодарности.');
+  if(input.message.length>1500)throw new Error('Комментарий должен быть не длиннее 1500 символов.');
+  let points=0,ratingNote='';
+  if(kind==='weighted'){
+    if(!input.message.trim()||!input.value||!Object.hasOwn(thanksValues,input.value))throw new Error('Опишите, за что благодарите, и выберите ценность.');
+    const preview=thanksPreview(state,actor.id,recipient.id,now);
+    if(!preview.remaining)throw new Error(preview.note);
+    points=preview.points;ratingNote=preview.note;
+    if(!Number.isSafeInteger(recipient.rating+points))throw new Error('Превышен допустимый рейтинг.');
+  }
+  const date=now.toISOString(),entryId=points?input.id:undefined;
+  const thanks:Thanks={id:input.id,fromId:actor.id,toId:recipient.id,message:input.message.trim(),date,kind,points,...(entryId?{entryId}:{}),ratingNote,...(kind==='weighted'?{value:input.value}:{})};
+  const next=points?{...state,employees:state.employees.map(e=>e.id===recipient.id?{...e,rating:e.rating+points}:e),entries:[{id:input.id,employeeId:recipient.id,authorId:actor.id,kind:'rating' as const,amount:points,reason:input.message.trim(),date,effectiveDate:moscowDay(now),title:'Весомое «Спасибо»',category:'thanks',groupAtAward:ratingProfile(recipient).group,roleAtAward:recipient.role},...state.entries]}:state;
+  return commit(next,input.id,{...state.recognition,thanks:[thanks,...state.recognition.thanks]});
 }
 // Explicit demo program terms, not bank thresholds. Never charge coins or rating.
 export const PROGRAMS=[
@@ -137,7 +180,7 @@ export function applyOpportunity(state:State,input:{id:string;employeeId:string;
   if(!program||!input.motivation.trim()) throw new Error('Выберите программу и опишите цель участия.');
   if(state.recognition.applications.some(a=>a.employeeId===input.employeeId&&a.programId===program.id&&a.status!=='rejected')) throw new Error('Вы уже подали заявку на эту программу.');
   if(input.path==='delta') {if(recentRating(state,input.employeeId)<program.threshold) throw new Error('Пока не достигнут порог. Можно податься по достижению.');}
-  else if(input.path==='achievement') {if(!state.recognition.requests.some(r=>r.id===input.achievementId&&r.employeeId===input.employeeId&&r.status==='approved')) throw new Error('Выберите своё подтверждённое достижение.');}
+  else if(input.path==='achievement') {if(!confirmedAchievements(state,input.employeeId).some(r=>r.id===input.achievementId)) throw new Error('Выберите своё подтверждённое достижение.');}
   else throw new Error('Выберите путь подачи.');
   return commit(state,input.id,{...state.recognition,applications:[{...input,status:'pending',audit:[note(input.employeeId,'Подано',input.motivation.trim())]},...state.recognition.applications]});
 }
@@ -147,7 +190,7 @@ export function decideOpportunity(state:State,input:{id:string;actorId:string;ap
   if(!a||a.status!=='pending'||actor.role!=='hr'||a.employeeId===actor.id) throw new Error('Решение принимает другой HR по ожидающей заявке.');
   if(!input.reason.trim()) throw new Error('Объясните решение.');
   const p=PROGRAMS.find(p=>p.id===a.programId)!;
-  if(input.decision==='accepted' && (a.path==='delta' ? recentRating(state,a.employeeId)<p.threshold : !state.recognition.requests.some(r=>r.id===a.achievementId&&r.status==='approved'&&r.employeeId===a.employeeId))) throw new Error('Основание подачи больше не действует. Нужна повторная проверка или новая заявка.');
+  if(input.decision==='accepted' && (a.path==='delta' ? recentRating(state,a.employeeId)<p.threshold : !confirmedAchievements(state,a.employeeId).some(r=>r.id===a.achievementId))) throw new Error('Основание подачи больше не действует. Нужна повторная проверка или новая заявка.');
   if(input.decision==='accepted'&&state.recognition.applications.filter(x=>x.programId===p.id&&x.status==='accepted').length>=p.seats) throw new Error('Свободных мест больше нет.');
   return commit(state,input.id,{...state.recognition,applications:state.recognition.applications.map(x=>x.id===a.id?{...x,status:input.decision,audit:[...x.audit,note(actor.id,input.decision==='accepted'?'Место подтверждено':'Отклонено',input.reason.trim())]}:x)});
 }

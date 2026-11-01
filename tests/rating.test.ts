@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadState, purchase, seed } from '../src/domain/model';
-import { appealAchievement, applyOpportunity, decideAchievement, decideOpportunity, expiryDay, moscowDay, ratingProfile, recentRating, reviewerFor, revokeAchievement, saveAchievement, sendThanks, teamIndex, type RequestInput } from '../src/domain/rating';
+import { appealAchievement, leaderboardGroup, ratingLeaderboard, confirmedAchievements, applyOpportunity, decideAchievement, decideOpportunity, expiryDay, moscowDay, ratingProfile, recentRating, reviewerFor, revokeAchievement, saveAchievement, sendThanks, thanksPreview, teamIndex, type RequestInput } from '../src/domain/rating';
 const input:RequestInput={id:'achievement',actorId:'e1',employeeId:'e1',kind:'professional',title:'Автоматизация отчёта',action:'Создала инструмент',benefit:'Время подготовки сократилось',personalRole:'Спроектировала и проверила',participants:'Команда аналитики',source:'Замеры до и после',resultDate:moscowDay(),contributionId:'report-e1',publicConsent:true,submit:true};
 const approve={id:'approval',actorId:'e2',requestId:'achievement',decision:'approved' as const,reason:'Проверены замеры и личный вклад',amount:150};
 test('draft does not award; submit, clarify, resubmit and approve form one audited workflow',()=>{
@@ -122,4 +122,97 @@ test('old saves migrate without inventing dated history, losing coins or orders'
   const n=loadState(JSON.stringify(old));assert.equal(n.employees[0].rating,780);assert.equal(n.employees[0].coins,750);assert.equal(n.orders.length,1);
   assert.deepEqual(n.recognition,{requests:[],thanks:[],applications:[]});assert.equal(recentRating(n,'e1'),recentRating(s,'e1'));
   assert.deepEqual(loadState(JSON.stringify({...s,recognition:{requests:[{}],thanks:[],applications:[]}})),seed());
+});
+
+
+test('legacy confirmed entries qualify for programs; duplicates and reversed entries do not',()=>{
+  let s=seed();const entry=ratingEntriesForTest(s)[0];
+  assert.ok(entry);
+  assert.ok(confirmedAchievements(s,'e1').some(a=>a.id===entry.id));
+  const applied=applyOpportunity(s,{id:'legacy-program',employeeId:'e1',programId:'pilot',path:'achievement',achievementId:entry.id,motivation:'Применить опыт в пилоте'});
+  assert.equal(applied.recognition.applications[0].achievementId,entry.id);
+  assert.equal(applyOpportunity(applied,{id:'legacy-program',employeeId:'e1',programId:'pilot',path:'achievement',achievementId:entry.id,motivation:'Опыт'}),applied);
+  s={...s,entries:[{...entry,id:'reversal-legacy',amount:-entry.amount,reversalOf:entry.id},...s.entries]};
+  assert.ok(!confirmedAchievements(s,'e1').some(a=>a.id===entry.id));
+  assert.throws(()=>applyOpportunity(s,{id:'invalid-legacy',employeeId:'e1',programId:'pilot',path:'achievement',achievementId:entry.id,motivation:'Опыт'}));
+  assert.throws(()=>decideOpportunity({...s,recognition:applied.recognition},{id:'decide-legacy',actorId:'e3',applicationId:'legacy-program',decision:'accepted',reason:'Проверка'}));
+  const approved=decideAchievement(saveAchievement(seed(),input),approve);
+  assert.equal(confirmedAchievements(approved,'e1').filter(a=>a.id==='achievement'||a.id==='approval').length,1);
+});
+function ratingEntriesForTest(s:ReturnType<typeof seed>){return s.entries.filter(e=>e.kind==='rating'&&e.employeeId==='e1'&&e.amount>0)}
+
+test('HR can nominate across teams while assigned reviewer still confirms and consent stays private',()=>{
+  const s=saveAchievement(seed(),{...input,id:'hr-nomination',actorId:'e3',employeeId:'e10'});
+  assert.equal(s.recognition.requests[0].reviewerId,'e12');
+  assert.equal(s.recognition.requests[0].publicConsent,false);
+  assert.throws(()=>decideAchievement(s,{...approve,actorId:'e3',requestId:'hr-nomination'}));
+  assert.doesNotThrow(()=>decideAchievement(s,{...approve,actorId:'e12',requestId:'hr-nomination'}));
+});
+
+
+const weighted=(id:string,actorId='e1',employeeId='e4')=>({id,actorId,employeeId,kind:'weighted' as const,value:'result' as const,message:'Помог с результатом проекта'});
+const november=new Date('2026-11-01T12:00:00Z');
+test('weighted thanks uses team weight, awards once, preserves coins and does not become a qualifying achievement',()=>{
+ const original=seed();const s=sendThanks(original,weighted('weighted'),november);
+ assert.equal(s.employees.find(e=>e.id==='e4')!.rating,original.employees.find(e=>e.id==='e4')!.rating+1);
+ assert.deepEqual(s.employees.map(e=>e.coins),original.employees.map(e=>e.coins));
+ assert.equal(s.recognition.thanks[0].points,1);assert.equal(s.entries[0].category,'thanks');
+ assert.equal(recentRating(s,'e4','2026-11-01'),1);
+ assert.ok(!confirmedAchievements(s,'e4').some(a=>a.id==='weighted'));
+ assert.equal(sendThanks(s,weighted('weighted'),november),s);
+ assert.deepEqual(loadState(JSON.stringify(s)),s);
+ const cross=sendThanks(original,weighted('cross','e1','e10'),november);
+ assert.equal(cross.recognition.thanks[0].points,2);
+ assert.equal(thanksPreview(original,'e2','e1',november).weight,1);
+});
+test('weighted thanks requires a reason and a value, rejects self and invalid type, simple thanks allows no message',()=>{
+ for(const patch of [{message:''},{value:undefined},{value:'bad' as 'result'},{kind:'bad' as 'weighted'},{employeeId:'e1'}])assert.throws(()=>sendThanks(seed(),{...weighted('invalid'),...patch},november));
+ const s=sendThanks(seed(),{id:'warm',actorId:'e1',employeeId:'e4',message:''},november);
+ assert.equal(s.recognition.thanks[0].points,0);assert.equal(s.entries.length,seed().entries.length);
+ const legacy=seed();legacy.recognition.thanks=[{id:'legacy',fromId:'e1',toId:'e4',message:'Спасибо',date:november.toISOString()}];
+ assert.deepEqual(loadState(JSON.stringify(legacy)),legacy);
+});
+test('repeat thanks arrives without points and counts toward four monthly weighted sends; simple stays available',()=>{
+ let s=sendThanks(seed(),weighted('one'),november);s=sendThanks(s,weighted('repeat'),november);
+ assert.equal(s.recognition.thanks[0].points,0);assert.match(s.recognition.thanks[0].ratingNote!,/уже отправляли/);
+ s=sendThanks(s,weighted('three','e1','e5'),november);s=sendThanks(s,weighted('four','e1','e6'),november);
+ assert.throws(()=>sendThanks(s,weighted('five','e1','e7'),november),/все 4/);
+ assert.doesNotThrow(()=>sendThanks(s,{id:'simple-after',actorId:'e1',employeeId:'e7',message:''},november));
+ const december=sendThanks(s,weighted('december'),new Date('2026-11-30T21:00:00Z'));
+ assert.equal(december.recognition.thanks[0].points,1);assert.equal(december.entries[0].effectiveDate,'2026-12-01');
+});
+test('receiver monthly ceiling is ten; last award is capped and further thanks still arrive',()=>{
+ let s=sendThanks(seed(),weighted('same-team','e7','e8'),november);
+ for(const actor of ['e1','e4','e5','e6'])s=sendThanks(s,weighted('cap-'+actor,actor,'e8'),november);
+ assert.equal(s.recognition.thanks.reduce((sum,t)=>sum+(t.points||0),0),9);
+ s=sendThanks(s,weighted('last','e10','e8'),november);assert.equal(s.recognition.thanks[0].points,1);
+ s=sendThanks(s,weighted('over','e11','e8'),november);assert.equal(s.recognition.thanks[0].points,0);
+ assert.equal(s.recognition.thanks.reduce((sum,t)=>sum+(t.points||0),0),10);
+});
+test('quarterly reciprocal pattern stops new pair points, preserves previous awards and resets in new quarter',()=>{
+ let s=seed();
+ for(const month of ['10','11']){
+  const date=new Date(`2026-${month}-15T12:00:00Z`);
+  s=sendThanks(s,weighted('a-'+month),date);s=sendThanks(s,weighted('b-'+month,'e4','e1'),date);
+  assert.equal(s.recognition.thanks[0].points,1);
+ }
+ s=sendThanks(s,weighted('a-12'),new Date('2026-12-15T12:00:00Z'));
+ const before=s.employees.map(e=>e.rating);
+ s=sendThanks(s,weighted('b-12','e4','e1'),new Date('2026-12-15T12:00:00Z'));
+ assert.equal(s.recognition.thanks[0].points,0);assert.match(s.recognition.thanks[0].ratingNote!,/квартала/);assert.deepEqual(s.employees.map(e=>e.rating),before);
+ assert.equal(thanksPreview(s,'e1','e4',new Date('2026-12-20T12:00:00Z')).points,0);
+ s=sendThanks(s,weighted('new-quarter','e4','e1'),new Date('2027-01-01T12:00:00Z'));assert.equal(s.recognition.thanks[0].points,1);
+});
+
+
+test('leaderboard compares one role group, shares tied places and supports recent period without mutating balances',()=>{
+ const s=seed(),snapshot=JSON.stringify(s),group=leaderboardGroup(s.employees[0]);
+ const all=ratingLeaderboard(s,group,'all','2026-11-01');
+ assert.deepEqual(all.map(r=>[r.employee.id,r.score,r.place]),[['e4',840,1],['e1',780,2],['e5',780,2],['e6',620,4]]);
+ assert.ok(all.every(r=>r.employee.role==='employee'&&r.employee.department==='Цифровые продукты'));
+ assert.ok(!ratingLeaderboard(s,leaderboardGroup(s.employees[2])).some(r=>r.employee.role!=='hr'));
+ const recent=ratingLeaderboard(s,group,'recent','2026-11-01');
+ assert.equal(recent[0].employee.id,'e1');assert.equal(recent[0].score,200);
+ assert.deepEqual(recent.slice(1).map(r=>r.place),[2,2,2]);
+ assert.deepEqual(ratingLeaderboard(s,'missing'),[]);assert.equal(JSON.stringify(s),snapshot);
 });

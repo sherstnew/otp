@@ -65,9 +65,11 @@ test('v1 migration preserves balances, purchases, and processed ids', () => {
 test('catalog migration applies 5:1 to certificates while preserving order snapshots', () => {
   const s = seed();
   s.products.find(p => p.id === 'p4')!.price = 2000;
+  s.products.find(p => p.id === 'p4')!.description = 'Новая история. Демонстрационный сертификат на 1 000 ₽.';
   const old = purchase(s, { id: 'old-certificate', employeeId: 'e1', productId: 'p4' });
   const loaded = loadState(JSON.stringify(old));
   assert.equal(loaded.products.find(p => p.id === 'p4')!.price, 5000);
+  assert.equal(loaded.products.find(p => p.id === 'p4')!.description, 'Новая история. Сертификат на 1 000 ₽.');
   assert.equal(loaded.orders[0].price, 2000);
   assert.equal(loaded.employees[0].coins, 2250);
 });

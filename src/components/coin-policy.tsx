@@ -8,12 +8,12 @@ export function CoinRules() {
   return <Card><div className="section-heading"><h2>За что начисляются коины</h2><Badge tone="lime">5 коинов = 1 ₽</Badge></div>
     <DataTable headings={['Подтверждённое событие', 'Тариф', 'Лимит']}>
       {COIN_ACTIVITIES.map(a => <tr key={a.id}><td><strong>{a.name}</strong></td><td className="number">+{fmt(a.amount)}</td><td>{a.limit} {a.period === 'year' ? 'в год' : 'за всё время'}</td></tr>)}
-    </DataTable><p className="table-note">За заполнение профиля суммарно 3 500 коинов. Вступление в сообщество и обязательные курсы не оплачиваются. В прототипе HR подтверждает события вручную; интеграции не подключены.</p>
-    <p className="table-note">Тарифы — рабочий сценарий команды от 31 октября 2026. Коины не сгорают со временем. Рейтинг начисляется отдельно за вклад и не зависит от покупок.</p></Card>;
+    </DataTable><p className="table-note">За заполнение профиля суммарно 3 500 коинов. Вступление в сообщество и обязательные курсы не оплачиваются. События подтверждает HR.</p>
+    <p className="table-note">Коины не сгорают со временем. Рейтинг начисляется отдельно за вклад и не зависит от покупок.</p></Card>;
 }
 export function CoinBudget({ state }: { state: State }) {
   const issued = issuedCoins(state);
-  return <Card><Badge>Сценарий · {policyYear()}</Badge><h3>Лимит новых коинов</h3><p><strong>{fmt(issued)}</strong> из {fmt(COIN_POLICY.annualCeiling)}</p><p className="muted small">Осталось {fmt(Math.max(0, COIN_POLICY.annualCeiling - issued))} коинов. Покупки не восстанавливают лимит выпуска.</p><p className="small muted">Счётчик учитывает операции этого демо, а не выпуск всего банка. Стартовые накопления — отдельный баланс. При нехватке лимита начисление целиком отклоняется: частичные выплаты не согласованы.</p></Card>;
+  return <Card><Badge>{policyYear()} год</Badge><h3>Лимит новых коинов</h3><p><strong>{fmt(issued)}</strong> из {fmt(COIN_POLICY.annualCeiling)}</p><p className="muted small">Осталось {fmt(Math.max(0, COIN_POLICY.annualCeiling - issued))} коинов. Покупки не восстанавливают лимит выпуска.</p><p className="small muted">Накопленный баланс сохраняется. Для нового начисления должна быть доступна вся сумма в пределах годового лимита.</p></Card>;
 }
 export function CoinGrantForm({ state, actor, update, onSuccess }: { state: State; actor: Employee; update: (fn: (s: State) => State) => void; onSuccess: () => void }) {
   const [recipient, setRecipient] = useState('');
