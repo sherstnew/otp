@@ -9,7 +9,7 @@ export function CoinRules() {
     <DataTable headings={['Подтверждённое событие', 'Тариф', 'Лимит']}>
       {COIN_ACTIVITIES.map(a => <tr key={a.id}><td><strong>{a.name}</strong></td><td className="number">+{fmt(a.amount)}</td><td>{a.limit} {a.period === 'year' ? 'в год' : 'за всё время'}</td></tr>)}
     </DataTable><p className="table-note">За заполнение профиля суммарно 3 500 коинов. Вступление в сообщество и обязательные курсы не оплачиваются. События подтверждает HR.</p>
-    <p className="table-note">Коины не сгорают со временем. Рейтинг начисляется отдельно за вклад и не зависит от покупок.</p></Card>;
+    <p className="table-note">За подтверждённое достижение R1–R5 начисляются баллы и коины: базовый сценарий — 373 коина за балл. Уровень выбирает проверяющий в заявке на достижение. Коины не сгорают со временем; покупки не меняют рейтинг.</p></Card>;
 }
 export function CoinBudget({ state }: { state: State }) {
   const issued = issuedCoins(state);

@@ -8,4 +8,5 @@
   --text-xs:12px;--text-sm:14px;--text-base:16px;--text-lg:20px;--text-xl:24px;--text-2xl:32px;--text-3xl:40px;
   --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--space-10:40px;--space-12:48px;--space-16:64px;
   --radius-control:12px;--radius-card:24px;--radius-pill:999px;--control-height:48px;--tab-height:44px;--content-width:1200px;--motion-slide:360ms;--motion-ease:cubic-bezier(.22,1,.36,1);--menu-shadow:0 12px 32px var(--shadow);--story-width:240px;
+  --achievement-min-width:280px;
 }

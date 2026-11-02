@@ -1,4 +1,6 @@
 import type { Employee, Entry, State } from './model';
+import { ACHIEVEMENT_TYPES, ACHIEVEMENT_LEVELS, achievementReward, type AchievementLevel, type AchievementType } from './achievements';
+import { COIN_POLICY, issuedCoins } from './coins';
 
 export type ContributionKind = 'professional' | 'social' | 'management';
 export type RequestStatus = 'draft' | 'pending' | 'clarification' | 'approved' | 'rejected' | 'corrected';
@@ -8,6 +10,7 @@ export type AchievementRequest = {
   title: string; action: string; benefit: string; personalRole: string; participants: string;
   source: string; resultDate: string; contributionId: string; publicConsent: boolean;
   status: RequestStatus; audit: Audit[]; entryId?: string; appeal?: string; appealResolution?: string;
+  achievementType?: AchievementType; level?: AchievementLevel; coinEntryId?: string;
 };
 export type ThanksValue = 'result'|'learning'|'enjoyment';
 export type Thanks = { id: string; fromId: string; toId: string; message: string; date: string; kind?:'simple'|'weighted'; value?:ThanksValue; points?:number; entryId?:string; ratingNote?:string };
@@ -21,7 +24,7 @@ export function validRecognition(value: unknown): value is RecognitionState {
   const str=(v:unknown)=>typeof v==='string';
   const audit=(v:unknown)=>Array.isArray(v)&&v.every(a=>a&&str(a.actorId)&&str(a.action)&&str(a.reason)&&str(a.date)&&Number.isFinite(Date.parse(a.date)));
   return Array.isArray(s.requests)&&Array.isArray(s.thanks)&&Array.isArray(s.applications)
-    &&s.requests.every(r=>r&&[r.id,r.employeeId,r.authorId,r.reviewerId,r.title,r.action,r.benefit,r.personalRole,r.participants,r.source,r.resultDate,r.contributionId].every(str)&&['professional','social','management'].includes(r.kind)&&['draft','pending','clarification','approved','rejected','corrected'].includes(r.status)&&typeof r.publicConsent==='boolean'&&audit(r.audit))
+    &&s.requests.every(r=>r&&[r.id,r.employeeId,r.authorId,r.reviewerId,r.title,r.action,r.benefit,r.personalRole,r.participants,r.source,r.resultDate,r.contributionId].every(str)&&['professional','social','management'].includes(r.kind)&&['draft','pending','clarification','approved','rejected','corrected'].includes(r.status)&&typeof r.publicConsent==='boolean'&&audit(r.audit)&&(r.achievementType===undefined||ACHIEVEMENT_TYPES.some(t=>t.id===r.achievementType&&t.kind===r.kind))&&(r.level===undefined||Object.hasOwn(ACHIEVEMENT_LEVELS,r.level))&&(r.coinEntryId===undefined||str(r.coinEntryId)))
     &&s.thanks.every(t=>t&&[t.id,t.fromId,t.toId,t.message,t.date].every(str)&&Number.isFinite(Date.parse(t.date))&&(t.kind===undefined||t.kind==='simple'||t.kind==='weighted')&&(t.points===undefined||[0,1,2].includes(t.points))&&(t.kind!=='weighted'||!!t.message.trim()&&!!t.value&&Object.hasOwn(thanksValues,t.value))&&(t.entryId===undefined||str(t.entryId)))
     &&s.applications.every(a=>a&&[a.id,a.employeeId,a.programId,a.motivation].every(str)&&['delta','achievement'].includes(a.path)&&['pending','accepted','rejected'].includes(a.status)&&PROGRAMS.some(p=>p.id===a.programId)&&audit(a.audit));
 }
@@ -75,7 +78,7 @@ export function reviewerFor(state: State, employeeId: string, kind: Contribution
   if (!reviewerId) throw new Error('Ответственный не назначен. Нужен маршрут замещения HR.');
   return reviewerId;
 }
-export type RequestInput = Pick<AchievementRequest,'employeeId'|'kind'|'title'|'action'|'benefit'|'personalRole'|'participants'|'source'|'resultDate'|'contributionId'|'publicConsent'> & {id:string;actorId:string;requestId?:string;submit:boolean};
+export type RequestInput = Pick<AchievementRequest,'employeeId'|'kind'|'title'|'action'|'benefit'|'personalRole'|'participants'|'source'|'resultDate'|'contributionId'|'publicConsent'|'achievementType'> & {id:string;actorId:string;requestId?:string;submit:boolean};
 export function saveAchievement(state: State, input: RequestInput): State {
   if(operation(state,input.id)) return state;
   const actor = person(state,input.actorId), employee=person(state,input.employeeId);
@@ -83,6 +86,8 @@ export function saveAchievement(state: State, input: RequestInput): State {
   if (input.requestId && !old) throw new Error('Заявка не найдена.');
   if (old && (old.authorId!==actor.id || old.employeeId!==employee.id || !['draft','clarification'].includes(old.status))) throw new Error('Эту заявку нельзя редактировать.');
   const reviewerId = reviewerFor(state,employee.id,input.kind);
+  if(input.achievementType && !ACHIEVEMENT_TYPES.some(t=>t.id===input.achievementType&&t.kind===input.kind)) throw new Error('Вид достижения не соответствует категории вклада.');
+  if(old?.achievementType && !input.achievementType) throw new Error('Выберите вид достижения.');
   if (actor.id!==employee.id && actor.id!==reviewerId && actor.role!=='hr') throw new Error('Можно предложить свой вклад или вклад непосредственного сотрудника в своём потоке.');
   if (!input.title.trim()) throw new Error('Добавьте название достижения.');
   if (input.submit) {
@@ -94,9 +99,10 @@ export function saveAchievement(state: State, input: RequestInput): State {
   }
   const request:AchievementRequest={id:old?.id||input.id,employeeId:employee.id,authorId:actor.id,reviewerId,kind:input.kind,title:input.title.trim(),action:input.action.trim(),benefit:input.benefit.trim(),personalRole:input.personalRole.trim(),participants:input.participants.trim(),source:input.source.trim(),resultDate:input.resultDate,contributionId:input.contributionId.trim(),publicConsent:input.publicConsent,status:input.submit?'pending':'draft',audit:[...(old?.audit||[]),note(actor.id,input.submit?'Подано на проверку':'Сохранён черновик',input.title.trim())]};
   request.publicConsent = actor.id===employee.id && request.publicConsent;
+  if(input.achievementType) request.achievementType=input.achievementType;
   return commit(state,input.id,{...state.recognition,requests:old?state.recognition.requests.map(r=>r.id===old.id?request:r):[request,...state.recognition.requests]});
 }
-export function decideAchievement(state:State,input:{id:string;actorId:string;requestId:string;decision:'approved'|'rejected'|'clarification';reason:string;amount?:number}):State {
+export function decideAchievement(state:State,input:{id:string;actorId:string;requestId:string;decision:'approved'|'rejected'|'clarification';reason:string;amount?:number;level?:AchievementLevel}):State {
   if(operation(state,input.id)) return state;
   const r=state.recognition.requests.find(r=>r.id===input.requestId);
   if(!r || r.status!=='pending') throw new Error('Заявка уже рассмотрена или не отправлена.');
@@ -105,14 +111,16 @@ export function decideAchievement(state:State,input:{id:string;actorId:string;re
   if(!input.reason.trim()) throw new Error('Объясните решение.');
   let next=state;
   if(input.decision==='approved') {
-    const amount=input.amount??0, employee=person(state,r.employeeId);
+    const reward=r.achievementType?achievementReward(input.level!):undefined;
+    const amount=reward?.points??input.amount??0, employee=person(state,r.employeeId);
+    if(reward && (issuedCoins(state)+reward.coins>COIN_POLICY.annualCeiling || !Number.isSafeInteger(employee.coins+reward.coins))) throw new Error('Лимит выпуска или баланса коинов исчерпан. Начисление не выполнено.');
     if(!Number.isSafeInteger(amount)||amount<=0||!Number.isSafeInteger(employee.rating+amount)) throw new Error('Укажите положительное целое число баллов.');
     if(ratingEntries(state,r.employeeId).some(e=>e.contributionId===r.contributionId)) throw new Error('Этот личный вклад уже признан.');
     const date=new Date().toISOString();
-    const entry:Entry={id:input.id,employeeId:r.employeeId,authorId:input.actorId,kind:'rating',amount,reason:input.reason.trim(),date,effectiveDate:moscowDay(),resultDate:r.resultDate,title:r.title,contributionId:r.contributionId,category:r.kind,groupAtAward:ratingProfile(employee).group,roleAtAward:employee.role};
-    next={...state,employees:state.employees.map(e=>e.id===r.employeeId?{...e,rating:e.rating+amount}:e),entries:[entry,...state.entries]};
+    const entry:Entry={id:input.id,employeeId:r.employeeId,authorId:input.actorId,kind:'rating',amount,reason:input.reason.trim(),date,effectiveDate:reward?r.resultDate:moscowDay(),resultDate:r.resultDate,title:r.title,contributionId:r.contributionId,category:r.kind,groupAtAward:ratingProfile(employee).group,roleAtAward:employee.role};
+    next={...state,employees:state.employees.map(e=>e.id===r.employeeId?{...e,rating:e.rating+amount,coins:e.coins+(reward?.coins||0)}:e),entries:[entry,...(reward?[{...entry,id:`${input.id}:coins`,kind:'coins' as const,amount:reward.coins}]:[]),...state.entries]};
   }
-  return commit(next,input.id,{...state.recognition,requests:state.recognition.requests.map(x=>x.id===r.id?{...x,status:input.decision,entryId:input.decision==='approved'?input.id:undefined,audit:[...x.audit,note(input.actorId,statusLabel[input.decision],input.reason.trim())]}:x)});
+  return commit(next,input.id,{...state.recognition,requests:state.recognition.requests.map(x=>x.id===r.id?{...x,status:input.decision,entryId:input.decision==='approved'?input.id:undefined,...(input.decision==='approved'&&r.achievementType?{level:input.level,coinEntryId:`${input.id}:coins`}:{}),audit:[...x.audit,note(input.actorId,statusLabel[input.decision],input.reason.trim())]}:x)});
 }
 export function appealAchievement(state:State,input:{id:string;actorId:string;requestId:string;reason:string;resolve?:boolean}):State {
   if(operation(state,input.id)) return state;
@@ -128,8 +136,11 @@ export function revokeAchievement(state:State,input:{id:string;actorId:string;re
   if(!r || r.status!=='approved' || actor.role!=='hr' || actor.id===r.employeeId) throw new Error('Исправление доступно другому HR для подтверждённой карточки.');
   if(!input.reason.trim()) throw new Error('Добавьте причину исправления.');
   const entry=state.entries.find(e=>e.id===r.entryId)!;
+  const coinEntry=r.coinEntryId?state.entries.find(e=>e.id===r.coinEntryId):undefined;
+  if(r.coinEntryId && (!coinEntry || person(state,r.employeeId).coins<coinEntry.amount)) throw new Error('Коины за достижение уже потрачены. Для отмены необходимо восстановить доступный баланс.');
   if(!entry || person(state,r.employeeId).rating<entry.amount) throw new Error('Начисление не найдено или баланс не позволяет исправление.');
-  const next={...state,employees:state.employees.map(e=>e.id===r.employeeId?{...e,rating:e.rating-entry.amount}:e),entries:[{...entry,id:input.id,authorId:actor.id,amount:-entry.amount,reason:input.reason.trim(),date:new Date().toISOString(),reversalOf:entry.id},...state.entries]};
+  const reversal={authorId:actor.id,reason:input.reason.trim(),date:new Date().toISOString()};
+  const next={...state,employees:state.employees.map(e=>e.id===r.employeeId?{...e,rating:e.rating-entry.amount,coins:e.coins-(coinEntry?.amount||0)}:e),entries:[{...entry,...reversal,id:input.id,amount:-entry.amount,reversalOf:entry.id},...(coinEntry?[{...coinEntry,...reversal,id:`${input.id}:coins`,amount:-coinEntry.amount,reversalOf:coinEntry.id}]:[]),...state.entries]};
   return commit(next,input.id,{...state.recognition,requests:state.recognition.requests.map(x=>x.id===r.id?{...x,status:'corrected',audit:[...x.audit,note(actor.id,'Начисление отменено',input.reason.trim())]}:x)});
 }
 // Team membership follows the direct manager; a lead belongs to the team they lead.
